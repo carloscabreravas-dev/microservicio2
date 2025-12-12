@@ -1,0 +1,164 @@
+name: Deploy Microservicio2 to Docker Hub and OpenShift
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'app.py'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'k8s.yaml'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: microservicio2
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKER_USER }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-to-openshift:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install OpenShift CLI
+        run: |
+          curl -fL https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/latest/openshift-client-linux.tar.gz -o oc.tar.gz
+          tar -xzf oc.tar.gz
+          sudo mv oc /usr/local/bin/
+          oc version --client
+      
+      - name: Login to OpenShift
+        run: |
+          oc login --server=${{ secrets.OPENSHIFT_SERVER }} \
+            --token=${{ secrets.OPENSHIFT_TOKEN }} \
+            --insecure-skip-tls-verify=true
+      
+      - name: Create or switch to namespace
+        run: |
+          oc new-project ${{ secrets.OPENSHIFT_NAMESPACE }} --skip-project-validation 2>/dev/null || \
+          oc project ${{ secrets.OPENSHIFT_NAMESPACE }}
+      
+      - name: Create image pull secret (if needed)
+        run: |
+          oc create secret docker-registry dockerhub-secret \
+            --docker-server=docker.io \
+            --docker-username=${{ secrets.DOCKER_USER }} \
+            --docker-password=${{ secrets.DOCKER_PASSWORD }} \
+            --docker-email=noreply@github.com \
+            -n ${{ secrets.OPENSHIFT_NAMESPACE }} 2>/dev/null || true
+      
+      - name: Link image pull secret to service account
+        run: |
+          oc secrets link default dockerhub-secret \
+            --for=pull \
+            -n ${{ secrets.OPENSHIFT_NAMESPACE }} 2>/dev/null || true
+      
+      - name: Update image in k8s.yaml
+        run: |
+          sed -i 's|image: .*/microservicio2:.*|image: ${{ secrets.DOCKER_USER }}/microservicio2:latest|' k8s.yaml
+          sed -i 's|namespace: .*|namespace: ${{ secrets.OPENSHIFT_NAMESPACE }}|' k8s.yaml
+      
+      - name: Deploy to OpenShift
+        run: |
+          oc apply -f k8s.yaml -n ${{ secrets.OPENSHIFT_NAMESPACE }}
+      
+      - name: Wait for deployment rollout
+        run: |
+          oc rollout status deployment/microservicio2 \
+            -n ${{ secrets.OPENSHIFT_NAMESPACE }} \
+            --timeout=5m
+      
+      - name: Get deployment info
+        run: |
+          echo "Deployment Status:"
+          oc get deployments -n ${{ secrets.OPENSHIFT_NAMESPACE }}
+          echo ""
+          echo "Pods Status:"
+          oc get pods -n ${{ secrets.OPENSHIFT_NAMESPACE }}
+          echo ""
+          echo "Services:"
+          oc get services -n ${{ secrets.OPENSHIFT_NAMESPACE }}
+
+  verify-deployment:
+    needs: deploy-to-openshift
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Install OpenShift CLI
+        run: |
+          curl -fL https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/latest/openshift-client-linux.tar.gz -o oc.tar.gz
+          tar -xzf oc.tar.gz
+          sudo mv oc /usr/local/bin/
+      
+      - name: Login to OpenShift
+        run: |
+          oc login --server=${{ secrets.OPENSHIFT_SERVER }} \
+            --token=${{ secrets.OPENSHIFT_TOKEN }} \
+            --insecure-skip-tls-verify=true
+      
+      - name: Verify deployment
+        run: |
+          echo "Checking if pods are running..."
+          oc get pods -n ${{ secrets.OPENSHIFT_NAMESPACE }} | grep microservicio2
+          
+          READY_REPLICAS=$(oc get deployment microservicio2 \
+            -n ${{ secrets.OPENSHIFT_NAMESPACE }} \
+            -o jsonpath='{.status.readyReplicas}')
+          
+          DESIRED_REPLICAS=$(oc get deployment microservicio2 \
+            -n ${{ secrets.OPENSHIFT_NAMESPACE }} \
+            -o jsonpath='{.spec.replicas}')
+          
+          echo "Ready replicas: $READY_REPLICAS / $DESIRED_REPLICAS"
+          
+          if [ "$READY_REPLICAS" = "$DESIRED_REPLICAS" ]; then
+            echo "✓ Deployment successful!"
+            exit 0
+          else
+            echo "✗ Deployment incomplete"
+            exit 1
+          fi

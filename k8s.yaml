@@ -1,0 +1,292 @@
+---
+# ConfigMap para variables de entorno de Microservicio2
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: microservicio2-config
+  namespace: carloscabreravas-dev
+data:
+  DEBUG: "false"
+  APP_NAME: "Microservicio2 API"
+  API_VERSION: "1.0.0"
+  MICROSERVICIO1_URL: "http://microservicio1:5000"
+
+---
+# Deployment para Microservicio2
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: microservicio2
+  namespace: carloscabreravas-dev
+  labels:
+    app: microservicio2
+    version: "1.0.0"
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: microservicio2
+  template:
+    metadata:
+      labels:
+        app: microservicio2
+        network-policy: allowed-to-microservicio1
+    spec:
+      serviceAccountName: microservicio2
+      securityContext:
+        fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+      - name: microservicio2
+        image: carloscabreravas/microservicio2:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5001
+          name: http
+          protocol: TCP
+        env:
+        - name: MICROSERVICIO1_URL
+          valueFrom:
+            configMapKeyRef:
+              name: microservicio2-config
+              key: MICROSERVICIO1_URL
+        - name: APP_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: microservicio2-config
+              key: APP_NAME
+        - name: API_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: microservicio2-config
+              key: API_VERSION
+        - name: DEBUG
+          valueFrom:
+            configMapKeyRef:
+              name: microservicio2-config
+              key: DEBUG
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5001
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+
+---
+# Service para Microservicio2
+apiVersion: v1
+kind: Service
+metadata:
+  name: microservicio2
+  namespace: carloscabreravas-dev
+  labels:
+    app: microservicio2
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5001
+    targetPort: 5001
+    protocol: TCP
+    name: http
+  selector:
+    app: microservicio2
+
+---
+# ServiceAccount para Microservicio2
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: microservicio2
+  namespace: carloscabreravas-dev
+
+---
+# NetworkPolicy - Ingress para Microservicio2 (acepta tráfico externo)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: microservicio2-ingress
+  namespace: carloscabreravas-dev
+spec:
+  podSelector:
+    matchLabels:
+      app: microservicio2
+  policyTypes:
+  - Ingress
+  ingress:
+  # Permitir desde ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 5001
+  # Permitir desde el mismo namespace (debugging, monitoring)
+  - from:
+    - podSelector:
+        matchLabels:
+          namespace: carloscabreravas-dev
+    ports:
+    - protocol: TCP
+      port: 5001
+
+---
+# NetworkPolicy - Egress para Microservicio2 (acceso a Microservicio1)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: microservicio2-egress-to-microservicio1
+  namespace: carloscabreravas-dev
+spec:
+  podSelector:
+    matchLabels:
+      app: microservicio2
+  policyTypes:
+  - Egress
+  egress:
+  # Permitir salida hacia Microservicio1
+  - to:
+    - podSelector:
+        matchLabels:
+          app: microservicio1
+    ports:
+    - protocol: TCP
+      port: 5000
+  # Permitir DNS (necesario para resolver nombres)
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: UDP
+      port: 53
+  # Permitir a kubernetes API
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: default
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# NetworkPolicy para Microservicio1 - permitir ingreso desde Microservicio2
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: microservicio1-allow-from-microservicio2
+  namespace: carloscabreravas-dev
+spec:
+  podSelector:
+    matchLabels:
+      app: microservicio1
+  policyTypes:
+  - Ingress
+  ingress:
+  # Permitir desde Microservicio2
+  - from:
+    - podSelector:
+        matchLabels:
+          app: microservicio2
+    ports:
+    - protocol: TCP
+      port: 5000
+  # Permitir desde ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 5000
+
+---
+# Route para OpenShift - Microservicio2
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: microservicio2
+  namespace: carloscabreravas-dev
+  labels:
+    app: microservicio2
+spec:
+  host: microservicio2.apps.openshift.com
+  path: /
+  to:
+    kind: Service
+    name: microservicio2
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Allow
+  wildcardPolicy: None
+
+---
+# PodDisruptionBudget para alta disponibilidad
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: microservicio2-pdb
+  namespace: carloscabreravas-dev
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: microservicio2
+
+---
+# HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: microservicio2-hpa
+  namespace: carloscabreravas-dev
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: microservicio2
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
