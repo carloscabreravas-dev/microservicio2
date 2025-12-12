@@ -9,7 +9,7 @@ data:
   DEBUG: "false"
   APP_NAME: "Microservicio2 API"
   API_VERSION: "1.0.0"
-  MICROSERVICIO1_URL: "http://microservicio:80"
+  MICROSERVICIO1_URL: "http://microservicio.carloscabreravas-dev.svc.cluster.local:80"
 
 ---
 # Deployment para Microservicio2
