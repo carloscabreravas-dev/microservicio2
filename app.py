@@ -8,7 +8,7 @@ load_dotenv()
  
 app = Flask(__name__)
  
-# Configuración
+# Configuración para consumir microservicio1
 MICROSERVICIO1_URL = os.getenv('MICROSERVICIO1_URL', 'http://localhost:5000')
 DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
 APP_NAME = os.getenv('APP_NAME', 'Microservicio2 API')
