@@ -9,6 +9,7 @@ data:
   DEBUG: "false"
   APP_NAME: "Microservicio2 API"
   API_VERSION: "1.0.0"
+  # Usar solo el nombre del servicio (DNS interno de Kubernetes)
   MICROSERVICIO1_URL: "http://microservicio.carloscabreravas-dev.svc.cluster.local:5000"
  
 ---
@@ -43,11 +44,9 @@ spec:
     metadata:
       labels:
         app: microservicio2
-        network-policy: allowed-to-microservicio
     spec:
       serviceAccountName: microservicio2
-      imagePullSecrets:
-        - name: dockerhub-secret
+      dnsPolicy: ClusterFirst
       containers:
       - name: microservicio2
         image: carloscabreravas/microservicio2:latest
@@ -119,106 +118,6 @@ spec:
     name: http
   selector:
     app: microservicio2
- 
----
-# NetworkPolicy - Egress para Microservicio2 (acceso a Microservicio1)
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: microservicio2-egress
-  namespace: carloscabreravas-dev
-spec:
-  podSelector:
-    matchLabels:
-      app: microservicio2
-  policyTypes:
-  - Egress
-  egress:
-  # Permitir salida hacia Microservicio1
-  - to:
-    - podSelector:
-        matchLabels:
-          app: microservicio
-    ports:
-    - protocol: TCP
-      port: 80
-  # Permitir DNS (necesario para resolver nombres)
-  - to:
-    - namespaceSelector: {}
-      podSelector:
-        matchLabels:
-          k8s-app: kube-dns
-    ports:
-    - protocol: UDP
-      port: 53
-  # Permitir conexión a Kubernetes API
-  - to:
-    - namespaceSelector: {}
-    ports:
-    - protocol: TCP
-      port: 443
-    - protocol: TCP
-      port: 6443
- 
----
-# NetworkPolicy - Ingress para Microservicio2
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: microservicio2-ingress
-  namespace: carloscabreravas-dev
-spec:
-  podSelector:
-    matchLabels:
-      app: microservicio2
-  policyTypes:
-  - Ingress
-  ingress:
-  # Permitir desde el router de OpenShift
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          network.openshift.io/policy-group: ingress
-    ports:
-    - protocol: TCP
-      port: 5001
-  # Permitir desde el mismo namespace
-  - from:
-    - podSelector: {}
-    ports:
-    - protocol: TCP
-      port: 5001
- 
----
-# NetworkPolicy para Microservicio1 - permitir ingreso desde Microservicio2
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: microservicio-allow-from-microservicio2
-  namespace: carloscabreravas-dev
-spec:
-  podSelector:
-    matchLabels:
-      app: microservicio
-  policyTypes:
-  - Ingress
-  ingress:
-  # Permitir desde Microservicio2
-  - from:
-    - podSelector:
-        matchLabels:
-          app: microservicio2
-    ports:
-    - protocol: TCP
-      port: 80
-  # Permitir desde el router de OpenShift
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          network.openshift.io/policy-group: ingress
-    ports:
-    - protocol: TCP
-      port: 80
  
 ---
 # Route para OpenShift - Microservicio2
