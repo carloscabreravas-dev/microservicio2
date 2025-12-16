@@ -6,11 +6,11 @@ metadata:
   name: microservicio2-config
   namespace: carloscabreravas-dev
 data:
+  MICROSERVICIO1_URL: "http://microservicio.carloscabreravas-dev.svc.cluster.local:5000"
   DEBUG: "false"
   APP_NAME: "Microservicio2 API"
   API_VERSION: "1.0.0"
-  # Usar solo el nombre del servicio (DNS interno de Kubernetes)
-  MICROSERVICIO1_URL: "http://microservicio.carloscabreravas-dev.svc.cluster.local:5000"
+
  
 ---
 # ServiceAccount para Microservicio2
@@ -54,28 +54,10 @@ spec:
         ports:
         - containerPort: 5001
           name: http
-          protocol: TCP
-        env:
-        - name: MICROSERVICIO1_URL
-          valueFrom:
-            configMapKeyRef:
-              name: microservicio2-config
-              key: MICROSERVICIO1_URL
-        - name: APP_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: microservicio2-config
-              key: APP_NAME
-        - name: API_VERSION
-          valueFrom:
-            configMapKeyRef:
-              name: microservicio2-config
-              key: API_VERSION
-        - name: DEBUG
-          valueFrom:
-            configMapKeyRef:
-              name: microservicio2-config
-              key: DEBUG
+          protocol: TCP     
+        envFrom:
+            - configMapRef:
+                name: microservicio2-config
         livenessProbe:
           httpGet:
             path: /health
